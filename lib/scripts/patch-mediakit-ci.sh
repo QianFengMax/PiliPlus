@@ -7,46 +7,52 @@
 # 补丁在拿不到 Flutter 的 EGL 上下文时，自行用
 # eglGetPlatformDisplayEXT(EGL_PLATFORM_WAYLAND_EXT) 创建 display，
 # 并补上 EGLConfig 的兜底选择。
+#
+# 注意：media_kit 与 media_kit_video 来自不同的 git 源，
+# 负责 Linux 视频输出的是 media_kit_video（bggRGjQaUbCoE/media-kit），
+# 必须精确定位到包含 media_kit_video/linux/video_output.cc 的那个仓库。
 set -uo pipefail
 WS="${1:-$PWD}"
 PUB_CACHE="${PUB_CACHE:-$HOME/.pub-cache}"
 
 patch_file="$WS/lib/scripts/media_kit/egl_wayland_fallback.patch"
-[ -f "$patch_file" ] || { echo "WARN: patch not found: $patch_file"; exit 0; }
-
-# pub 的 git 依赖解包在 hosted/../git 或 .pub-cache/git 下
-dir=$(find "$PUB_CACHE" -maxdepth 4 -type d -name "media_kit_video" 2>/dev/null | head -1)
-if [ -z "$dir" ]; then
-  # 兼容 hosted 结构：git 依赖会在 ~/.pub-cache/git/<repo>-<sha>/
-  dir=$(ls -d "$PUB_CACHE"/git/*/media_kit_video 2>/dev/null | head -1)
+if [ ! -f "$patch_file" ]; then
+  echo "WARN: patch not found: $patch_file"; exit 0
 fi
 
-if [ -z "$dir" ]; then
-  echo "WARN: media_kit_video not found in pub cache, skip EGL patch"
+# 精确找出真正包含 linux/video_output.cc 的 media_kit_video 仓库
+target=""
+while IFS= read -r cc; do
+  [ -z "$cc" ] && continue
+  repo_root=$(cd "$(dirname "$cc")/../.." 2>/dev/null && pwd)
+  [ -z "$repo_root" ] && continue
+  if [ -d "$repo_root/.git" ] || git -C "$repo_root" rev-parse 2>/dev/null >/dev/null; then
+    target="$repo_root"
+    echo "candidate: $target"
+  fi
+done <<EOF
+$(find "$PUB_CACHE" -path "*media_kit_video/linux/video_output.cc" 2>/dev/null)
+EOF
+
+if [ -z "$target" ]; then
+  echo "WARN: no media_kit_video source with linux/video_output.cc found"
+  find "$PUB_CACHE" -maxdepth 3 -type d -name "media_kit*" 2>/dev/null | head -10
   exit 0
 fi
 
-repo_root=$(dirname "$dir")
-echo "media_kit repo: $repo_root"
+echo "patching: $target/media_kit_video/linux/video_output.cc"
+cd "$target" || exit 0
 
-cd "$repo_root" || exit 0
+if grep -q "owns_egl_display" media_kit_video/linux/video_output.cc 2>/dev/null; then
+  echo "EGL patch already applied, skip"
+  exit 0
+fi
 
 if git apply --check "$patch_file" 2>/dev/null; then
-  git apply "$patch_file" && echo "applied EGL wayland fallback patch"
-elif git apply --reverse --check "$patch_file" 2>/dev/null; then
-  echo "EGL patch already applied"
+  git apply "$patch_file" && echo "applied EGL wayland fallback patch OK"
 else
-  echo "WARN: EGL patch did not apply cleanly (upstream may have changed)"
-  # 退一步：用 python 直接改，尽量保证生效
-  python3 - "$repo_root/media_kit_video/linux/video_output.cc" <<'PY'
-import sys, pathlib
-p = pathlib.Path(sys.argv[1])
-if not p.exists():
-    print("  file missing"); sys.exit(0)
-s = p.read_text()
-if 'owns_egl_display' in s:
-    print("  already patched"); sys.exit(0)
-print("  fallback patch skipped: structure changed")
-PY
+  echo "FAILED: patch does not apply; aborting so build fails loudly"
+  git apply --check -v "$patch_file" 2>&1 | head -20
+  exit 1
 fi
 exit 0
