@@ -50,6 +50,9 @@ jobs:
       - name: Apply material_ui / cupertino_ui patches
         run: bash lib/scripts/pubpatch-ci.sh "$PWD" linux
 
+      - name: Fix nativeapi for Dart 3.14+
+        run: bash lib/scripts/fix-nativeapi-ci.sh
+
       - name: Build
         run: flutter build linux --release --dart-define-from-file=pili_release.json --no-pub
 
