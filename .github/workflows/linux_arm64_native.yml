@@ -1,0 +1,71 @@
+name: Build Linux arm64 (native runner)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci-arm64
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libmpv-dev libasound2-dev \
+            libayatana-appindicator3-dev unzip git
+
+      - name: Setup Flutter (community ARM64 SDK)
+        run: |
+          wget -q https://github.com/zhzhzhy/Flutter-SDK-ARM64/releases/download/Flutter-SDK-2026-11-20/Flutter-SDK-ARM64.zip
+          unzip -q Flutter-SDK-ARM64.zip -d "$HOME"
+          echo "$HOME/flutter/bin" >> $GITHUB_PATH
+
+      - name: Configure Flutter
+        run: |
+          git config --global --add safe.directory "$HOME/flutter"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          flutter config --enable-linux-desktop
+          flutter --version || true
+
+      - name: Generate build info
+        run: bash lib/scripts/prebuild-ci.sh "$PWD"
+
+      - name: Apply Flutter SDK patches
+        run: bash lib/scripts/patch-ci.sh "$PWD" linux
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Apply material_ui / cupertino_ui patches
+        run: bash lib/scripts/pubpatch-ci.sh "$PWD" linux
+
+      - name: Build
+        run: flutter build linux --release --dart-define-from-file=pili_release.json --no-pub
+
+      - name: Package
+        run: bash lib/scripts/package-ci.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PiliPlus_linux_arm64
+          path: PiliPlus_linux_*_arm64.deb
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/heads/ci-arm64')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: arm64-run${{ github.run_number }}
+          name: PiliPlus Linux ARM64 (build ${{ github.run_number }})
+          files: PiliPlus_linux_*_arm64.deb

@@ -61,6 +61,12 @@ abstract final class ThemeUtils {
       useMaterial3: true,
       colorScheme: colorScheme,
       fontFamily: fontFamily,
+      fontFamilyFallback: const [
+        'Noto Sans CJK SC',
+        'Noto Sans Math',
+        'Noto Sans',
+        'Noto Color Emoji',
+      ],
       textTheme: textTheme,
       appBarTheme: AppBarTheme(
         elevation: 0,

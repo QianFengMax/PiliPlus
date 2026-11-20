@@ -20,8 +20,8 @@ publish_to: "none" # Remove this line if you wish to publish to pub.dev
 version: 2.2.1+1
 
 environment:
-  sdk: ">=3.13.0"
-  flutter: 3.47.9
+  sdk: ">=3.13.0-0"
+  flutter: ">=3.44.4"
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -279,3 +279,12 @@ flutter:
     - family: custom_icon
       fonts:
         - asset: assets/fonts/custom_icon.ttf
+    - family: Noto Sans CJK SC
+      fonts:
+        - asset: assets/fonts/NotoSansSC-Regular.ttf
+    - family: Noto Sans
+      fonts:
+        - asset: assets/fonts/NotoSans-Regular.ttf
+    - family: Noto Sans Math
+      fonts:
+        - asset: assets/fonts/NotoSansMath-Regular.ttf
