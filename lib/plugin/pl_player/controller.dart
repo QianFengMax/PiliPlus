@@ -889,7 +889,8 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       if (Platform.isAndroid) 'ao': Pref.audioOutput,
       // Linux 下若 libmpv 缺少 v4l2m2m hwdec 后端，改用 FFmpeg 的
       // V4L2 mem2mem 解码器实现真正的硬件解码
-      if (linuxVd != null) 'vd': linuxVd!,
+      // 临时：先验证 EGL 补丁单独工作是否稳定
+      // if (linuxVd != null) 'vd': linuxVd!,
     };
     final autosync = Pref.autosync;
     if (autosync != '0') {
