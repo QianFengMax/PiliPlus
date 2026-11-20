@@ -227,9 +227,11 @@ abstract final class Pref {
   static int get sliderDuration =>
       _setting.get(SettingBoxKey.sliderDuration, defaultValue: 90);
 
+  // 默认请求 1080P：本机屏幕 3048x2032（约 3K），8K 源除了解码开销
+  // 翻数倍外看不出收益；需要更高画质时可在播放页手动切换。
   static int get defaultVideoQa => _setting.get(
     SettingBoxKey.defaultVideoQa,
-    defaultValue: VideoQuality.super8k.code,
+    defaultValue: VideoQuality.high1080.code,
   );
 
   static int get defaultVideoQaCellular => _setting.get(
@@ -252,6 +254,12 @@ abstract final class Pref {
     if (codecs is List) {
       return codecs.map((i) => VideoDecodeFormatType.values.byName(i)).toList();
     }
+    // Linux 上优先 AVC/HEVC：二者都有 V4L2 硬解解码器，
+    // 而当前 FFmpeg 打包普遍缺 av1_v4l2m2m，AV1 只能走 dav1d 软解，
+    // 4K 时 CPU 开销显著。其余平台维持原优先级。
+    if (Platform.isLinux) {
+      return const <VideoDecodeFormatType>[.AVC, .HEVC, .AV1];
+    }
     return const <VideoDecodeFormatType>[.AVC, .AV1];
   }
 
@@ -271,9 +279,11 @@ abstract final class Pref {
   static String get videoSync =>
       _setting.get(SettingBoxKey.videoSync, defaultValue: 'display-resample');
 
+  // 开启音画自动同步：display-resample 依赖刷新率对齐，
+  // 长时间播放或系统负载波动时容易累积音画偏差，autosync=30 可自动校正。
   static String get autosync => _setting.get(
     SettingBoxKey.autosync,
-    defaultValue: Platform.isAndroid ? '30' : '0',
+    defaultValue: '30',
   );
 
   static CDNService get defaultCDNService {
@@ -494,8 +504,11 @@ abstract final class Pref {
     return superResolutionType ?? SuperResolutionType.disable;
   }
 
-  static bool get preInitPlayer =>
-      _setting.get(SettingBoxKey.preInitPlayer, defaultValue: false);
+  // 桌面端预初始化播放器，缩短首次起播耗时
+  static bool get preInitPlayer => _setting.get(
+    SettingBoxKey.preInitPlayer,
+    defaultValue: PlatformUtils.isDesktop,
+  );
 
   static bool get mainTabBarView =>
       _setting.get(SettingBoxKey.mainTabBarView, defaultValue: false);
@@ -571,8 +584,9 @@ abstract final class Pref {
   static bool get enableSlideFS =>
       _setting.get(SettingBoxKey.enableSlideFS, defaultValue: true);
 
+  // 网络抖动时多给一次重试机会（2 -> 3），配合更大的缓冲降低起播失败率
   static int get retryCount =>
-      _setting.get(SettingBoxKey.retryCount, defaultValue: 2);
+      _setting.get(SettingBoxKey.retryCount, defaultValue: 3);
 
   static int get retryDelay =>
       _setting.get(SettingBoxKey.retryDelay, defaultValue: 500);
@@ -632,8 +646,11 @@ abstract final class Pref {
   static bool get showPgcTimeline =>
       _setting.get(SettingBoxKey.showPgcTimeline, defaultValue: true);
 
+  // 图片/封面缓存上限：桌面端磁盘宽裕，1GB -> 3GB，
+  // 减少封面重复下载，滚动列表更顺
   static num get maxCacheSize =>
-      _setting.get(SettingBoxKey.maxCacheSize) ?? 1 << 30;
+      _setting.get(SettingBoxKey.maxCacheSize) ??
+      (PlatformUtils.isDesktop ? 3 << 30 : 1 << 30);
 
   static bool get optTabletNav =>
       _setting.get(SettingBoxKey.optTabletNav, defaultValue: true);
@@ -840,11 +857,17 @@ abstract final class Pref {
   static bool get enableLongShowControl =>
       _setting.get(SettingBoxKey.enableLongShowControl, defaultValue: false);
 
-  static double get bufferSize =>
-      _setting.get(SettingBoxKey.bufferSize, defaultValue: 4.0);
+  // 桌面端放宽缓冲：本机内存充足（7GB+），4MB/16s 在 4K 高码率
+  // 或网络抖动时容易起播卡顿；提高到 32MB/30s，回退缓冲同步放宽。
+  static double get bufferSize => _setting.get(
+    SettingBoxKey.bufferSize,
+    defaultValue: PlatformUtils.isDesktop ? 32.0 : 4.0,
+  );
 
-  static double get bufferSec =>
-      _setting.get(SettingBoxKey.bufferSec, defaultValue: 16.0);
+  static double get bufferSec => _setting.get(
+    SettingBoxKey.bufferSec,
+    defaultValue: PlatformUtils.isDesktop ? 30.0 : 16.0,
+  );
 
   /// 直播流前向缓冲区大小（MB），0 表示跟随 [bufferSize] 的两倍
   static double get liveBufferSize =>
