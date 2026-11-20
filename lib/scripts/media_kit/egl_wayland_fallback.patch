@@ -1,0 +1,124 @@
+diff --git a/media_kit_video/linux/video_output.cc b/media_kit_video/linux/video_output.cc
+index 2d907e4..3416aeb 100644
+--- a/media_kit_video/linux/video_output.cc
++++ b/media_kit_video/linux/video_output.cc
+@@ -20,6 +20,7 @@ struct _VideoOutput {
+   TextureGL* texture_gl;
+   EGLDisplay egl_display; /* EGL display for mpv rendering (shared with flutter). */
+   EGLContext egl_context; /* Isolated EGL context (non-shared). */
++  gboolean owns_egl_display; /* TRUE when we created egl_display ourselves. */
+   EGLSurface egl_surface; /* Place holder surface for activating egl context */
+   guint8* pixel_buffer;
+   TextureSW* texture_sw;
+@@ -76,6 +77,13 @@ static void video_output_dispose(GObject* object) {
+       eglDestroyContext(self->egl_display, self->egl_context);
+       self->egl_context = EGL_NO_CONTEXT;
+     }
++
++    // 自行创建的 display 需要自己 terminate，避免泄漏
++    if (self->owns_egl_display && self->egl_display != EGL_NO_DISPLAY) {
++      eglTerminate(self->egl_display);
++      self->egl_display = EGL_NO_DISPLAY;
++      self->owns_egl_display = FALSE;
++    }
+     
+     g_object_unref(self->texture_gl);
+   }
+@@ -108,6 +116,7 @@ static void video_output_init(VideoOutput* self) {
+   self->pixel_buffer = NULL;
+   self->handle = NULL;
+   self->render_context = NULL;
++  self->owns_egl_display = FALSE;
+   self->width = 0;
+   self->height = 0;
+   self->configuration = VideoOutputConfiguration{};
+@@ -145,8 +154,37 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
+     EGLContext flutter_context = eglGetCurrentContext();
+     EGLSurface flutter_draw_surface = eglGetCurrentSurface(EGL_DRAW);
+     EGLSurface flutter_read_surface = eglGetCurrentSurface(EGL_READ);
+-    
+-    if (flutter_display != EGL_NO_DISPLAY && flutter_context != EGL_NO_CONTEXT) {
++
++    // Flutter 3.4x 起，Linux 上 VideoOutput 常在非渲染线程创建，
++    // 该线程没有 current EGL context，eglGetCurrentDisplay() 返回
++    // EGL_NO_DISPLAY，导致固定回退 S/W 渲染（画面撕裂、CPU 飙升）。
++    // 这里改为自行创建平台 EGL display，不依赖 Flutter 的线程上下文。
++    if (flutter_display == EGL_NO_DISPLAY) {
++      GdkDisplay* gdk_display = gdk_display_get_default();
++      if (gdk_display != NULL && GDK_IS_WAYLAND_DISPLAY(gdk_display)) {
++        PFNEGLGETPLATFORMDISPLAYEXTPROC get_platform_display =
++            (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress(
++                "eglGetPlatformDisplayEXT");
++        if (get_platform_display != NULL) {
++          flutter_display = get_platform_display(
++              EGL_PLATFORM_WAYLAND_EXT,
++              gdk_wayland_display_get_wl_display(gdk_display), NULL);
++          if (flutter_display != EGL_NO_DISPLAY) {
++            EGLint major = 0, minor = 0;
++            if (eglInitialize(flutter_display, &major, &minor)) {
++              self->owns_egl_display = TRUE;
++              g_print("media_kit: VideoOutput: Using own Wayland EGL display "
++                      "(EGL %d.%d).\n", major, minor);
++            } else {
++              flutter_display = EGL_NO_DISPLAY;
++            }
++          }
++        }
++      }
++    }
++
++    if (flutter_display != EGL_NO_DISPLAY &&
++        (flutter_context != EGL_NO_CONTEXT || self->owns_egl_display)) {
+       self->egl_display = flutter_display;
+       
+       // Bind OpenGL ES API (Flutter uses OpenGL ES on Linux)
+@@ -156,7 +194,8 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
+       EGLConfig config = NULL;
+       EGLint config_id = 0;
+       
+-      if (eglQueryContext(self->egl_display, flutter_context, EGL_CONFIG_ID, &config_id)) {
++      if (flutter_context != EGL_NO_CONTEXT &&
++          eglQueryContext(self->egl_display, flutter_context, EGL_CONFIG_ID, &config_id)) {
+         g_print("media_kit: VideoOutput: Flutter's EGL config ID: %d\n", config_id);
+         
+         // Get Flutter's exact config
+@@ -172,6 +211,39 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
+       } else {
+         g_printerr("media_kit: VideoOutput: Failed to query Flutter's EGL config ID.\n");
+       }
++
++      // 无 Flutter context 可查询时（见上文 owns_display 分支），
++      // 自行挑选一个支持 GLES2 且可做纹理的 config，否则会一直走软渲染。
++      if (config == NULL) {
++        EGLint fallback_attribs[] = {
++            EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
++            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
++            EGL_RED_SIZE, 8,
++            EGL_GREEN_SIZE, 8,
++            EGL_BLUE_SIZE, 8,
++            EGL_ALPHA_SIZE, 8,
++            EGL_NONE,
++        };
++        EGLint num = 0;
++        if (eglChooseConfig(self->egl_display, fallback_attribs, &config, 1, &num)
++                && num > 0) {
++          g_print("media_kit: VideoOutput: Using fallback EGL config.\n");
++        } else {
++          // 有些平台不支持 EGL_WINDOW_BIT，退一步不限 surface 类型
++          EGLint loose_attribs[] = {
++              EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
++              EGL_NONE,
++          };
++          num = 0;
++          if (eglChooseConfig(self->egl_display, loose_attribs, &config, 1, &num)
++                  && num > 0) {
++            g_print("media_kit: VideoOutput: Using loose EGL config.\n");
++          } else {
++            g_printerr("media_kit: VideoOutput: Failed to choose any EGL config.\n");
++            config = NULL;
++          }
++        }
++      }
+       
+       if (config != NULL) {        
+         // Create an isolated EGL context (NOT shared with Flutter)

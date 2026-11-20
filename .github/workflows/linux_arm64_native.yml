@@ -53,6 +53,9 @@ jobs:
       - name: Fix nativeapi for Dart 3.14+
         run: bash lib/scripts/fix-nativeapi-ci.sh
 
+      - name: Patch media_kit EGL (Wayland S/W fallback)
+        run: bash lib/scripts/patch-mediakit-ci.sh "$PWD"
+
       - name: Build
         run: flutter build linux --release --dart-define-from-file=pili_release.json --no-pub
 
