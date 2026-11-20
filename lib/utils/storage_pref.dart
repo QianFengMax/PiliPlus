@@ -504,10 +504,12 @@ abstract final class Pref {
     return superResolutionType ?? SuperResolutionType.disable;
   }
 
-  // 桌面端预初始化播放器，缩短首次起播耗时
+  // 注意：不要默认开启。预初始化会让 VideoOutput 在 Flutter 的 EGL
+  // 上下文就绪前创建，触发 "EGL display or context is invalid"，
+  // 进而回退 S/W 渲染（画面撕裂 + CPU 占用飙升）。保持上游默认 false。
   static bool get preInitPlayer => _setting.get(
     SettingBoxKey.preInitPlayer,
-    defaultValue: PlatformUtils.isDesktop,
+    defaultValue: false,
   );
 
   static bool get mainTabBarView =>
