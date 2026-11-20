@@ -1,6 +1,6 @@
 import 'dart:async' show StreamSubscription, Timer;
 import 'dart:convert' show ascii, utf8;
-import 'dart:io' show Platform;
+import 'dart:io' show Directory, FileSystemEntity, Platform, Process;
 import 'dart:math' show max, min;
 import 'dart:ui' as ui;
 
@@ -477,7 +477,49 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       : Pref.defaultVideoQa;
   late int cacheAudioQa = Pref.defaultAudioQa;
   bool enableHeart = true;
-  late final String? hwdec = Pref.enableHA ? Pref.hardwareDecoding : null;
+  /// mpv 的 hwdec（用户设置，Linux 上 auto 常因缺 v4l2m2m 后端而回退软解）
+  late final String? hwdec = Pref.enableHA
+      ? (Platform.isLinux && linuxVd != null
+            // 已改用 vd 指定硬解解码器时，hwdec 必须关掉，
+            // 否则 mpv 会先尝试 vulkan/vaapi 并反复失败
+            ? 'no'
+            : Pref.hardwareDecoding)
+      : null;
+
+  /// Linux 上探测到的 V4L2 mem2mem 解码器列表，作为 --vd 传给 mpv。
+  /// 有值时说明可以真正硬件解码，此时不再依赖 hwdec。
+  late final String? linuxVd =
+      (Platform.isLinux && Pref.enableHA && Pref.hardwareDecoding != 'no')
+      ? _probeLinuxV4l2()
+      : null;
+
+  /// 探测 FFmpeg 是否带 V4L2 mem2mem 解码器，且本机存在解码节点。
+  /// 返回形如 "h264_v4l2m2m,hevc_v4l2m2m,vp9_v4l2m2m"，否则 null。
+  /// 末尾追加软解解码器作为兜底：硬解不可用时 mpv 会顺序回退，
+  /// 不会出现黑屏或无法播放。
+  static String? _probeLinuxV4l2() {
+    try {
+      final hasDevice = Directory('/dev').listSync().any(
+        (e) => e.path.startsWith('/dev/video'),
+      );
+      if (!hasDevice) return null;
+
+      final out = '${Process.runSync('ffmpeg', ['-hide_banner', '-decoders']).stdout}';
+      final codecs = <String>[
+        if (out.contains('h264_v4l2m2m')) 'h264_v4l2m2m',
+        if (out.contains('hevc_v4l2m2m')) 'hevc_v4l2m2m',
+        if (out.contains('vp9_v4l2m2m')) 'vp9_v4l2m2m',
+        if (out.contains('vp8_v4l2m2m')) 'vp8_v4l2m2m',
+        if (out.contains('av1_v4l2m2m')) 'av1_v4l2m2m',
+      ];
+      if (codecs.isEmpty) return null;
+      // 兜底：任一硬解失败时按顺序回退到软解解码器
+      codecs.addAll(const ['ffh264', 'ffhevc', 'ffvp9', 'ffvp8', 'ffav1']);
+      return codecs.join(',');
+    } catch (_) {
+      return null;
+    }
+  }
 
   late final progressType = Pref.btmProgressBehavior;
   late final enableQuickDouble = Pref.enableQuickDouble;
@@ -845,6 +887,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     final opt = {
       'video-sync': Pref.videoSync,
       if (Platform.isAndroid) 'ao': Pref.audioOutput,
+      // Linux 下若 libmpv 缺少 v4l2m2m hwdec 后端，改用 FFmpeg 的
+      // V4L2 mem2mem 解码器实现真正的硬件解码
+      if (linuxVd != null) 'vd': linuxVd!,
     };
     final autosync = Pref.autosync;
     if (autosync != '0') {
